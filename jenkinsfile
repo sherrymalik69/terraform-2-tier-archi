@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
+        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+        AWS_DEFAULT_REGION    = 'us-east-1'
+        TF_BACKEND_BUCKET     = 'terrabucketforstate'
+        TF_BACKEND_KEY        = 'dev/terraform.tfstate'
+        TF_DYNAMODB_TABLE     = 'tf-lock-table'
+        DB_USERNAME           = credentials('DB_USERNAME')
+        DB_PASSWORD           = credentials('DB_PASSWORD')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                    checkout scmGit(branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/sherrymalik69/terraform-2-tier-archi.git']])
+            }
+        }
+        
+        stage('Initialize') {
+            steps {
+                sh 'terraform init \
+                    -backend-config="bucket=${TF_BACKEND_BUCKET}" \
+                    -backend-config="key=${TF_BACKEND_KEY}" \
+                    -backend-config="region=${AWS_DEFAULT_REGION}"\
+                    -backend-config="dynamodb_table=${TF_DYNAMODB_TABLE}"'
+            }
+        }
+        
+
+        stage('Plan') {
+            steps {
+                sh "terraform plan -var=username=$DB_USERNAME -var=password=$DB_PASSWORD -var-file='./config/terraform.tfvars' -out=terraform.plan"
+            }
+        }
+
+        stage('Apply') {
+            when {
+                expression { return params.runApply }
+            }
+            steps {
+                sh "terraform apply terraform.plan "
+            }
+        }
+
+        stage('Destroy') {
+            when {
+                expression { return params.runDestroy }
+            }
+            steps {
+                sh "terraform destroy -var=username=$DB_USERNAME -var=password=$DB_PASSWORD -var-file='./config/terraform.tfvars' --auto-approve"
+            }
+        }
+
+        stage('Input') {
+            steps {
+                input "Do you want to apply or destroy the infrastructure?"
+            }
+        }
+    }
+
+    parameters {
+        booleanParam(name: 'runApply', defaultValue: false, description: 'Apply the Terraform changes')
+        booleanParam(name: 'runDestroy', defaultValue: false, description: 'Destroy the Terraform resources')
+    }
+}
